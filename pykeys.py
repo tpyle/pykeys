@@ -110,6 +110,33 @@ def getCurrentDict():
     #return (hpass,internal_dict)
 
 
+def createPin():
+    res = parse_args(description,[{"name": "pin", "description": "Specifies the pin-create mode"},
+                                  {"name": "defaults", "flag": "-d", "description": "Use the default value (4 numbers).", "optional": True},
+                                  {"name": "length", "flag": "-n", "description": "The length of the pin", "has_value": True, "optional": True, "type": int},
+                                  {"name": "location", "flag": "-l", "description": "The location to add it to", "has_value": True, "optional": True}])
+    getCurrentDict()
+    length=None
+    location=None
+    if res.get("defaults"):
+        length=4
+    loc = res.get("location")
+    if loc == None:
+        loc=raw_input("Location: ")
+    loc = "{}/pin".format(loc)
+    if loc in internal_dict:
+        pfail ( "Location {} already exists".format(loc) )
+    length = res.get("length",length)
+    if length == None:
+        length=int(raw_input("Length: "))
+    password=""
+    random.seed()
+    while len ( password ) < length:
+        password += random.choice("0123456789")
+    internal_dict[loc] = password
+    print password
+    
+                     
 def createPass():
     res = parse_args(description,[{"name": "create", "description": "Specifies the create mode"},
                                   {"name": "defaults", "flag": "-d", "description": "Use the default values (16 characters, 4 of each). Values may be overwritten by CL args", "optional": True},
@@ -180,8 +207,8 @@ if ( len ( sys.argv ) <= 1 ):
     
 mode = sys.argv[1].lower()
 
-if mode not in ["add","remove","lookup","create","dump"]:
-    phelp(description,[("<mode>","The mode to use, one of add|create|remove|lookup")])
+if mode not in ["add","remove","lookup","create","dump", "pin"]:
+    phelp(description,[("<mode>","The mode to use, one of add|create|remove|lookup|dump|pin")])
     exit(1)
 
     
@@ -213,6 +240,8 @@ elif mode == "remove":
         pfail("Error: No such entry")
 elif mode == "create":
     createPass()
+elif mode== "pin":
+    createPin()
 elif mode == "lookup":
     res = parse_args(description,[{'name': 'lookup', 'description': 'Specifies the lookup mode'},
                                   {'name': 'loc', "description": "The element to lookup"}])
@@ -220,6 +249,10 @@ elif mode == "lookup":
     loc = res["loc"]
     if loc in internal_dict:
         print internal_dict[loc]
+        if loc + "/pin" in internal_dict:
+            print internal_dict[loc+"/pin"]
+    elif loc + "/pin" in internal_dict:
+        print internal_dict[loc+"/pin"]
     else:
         pfail("Error: No such entry")
 elif mode == "dump":

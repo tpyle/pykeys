@@ -1,4 +1,5 @@
 #!/usr/bin/python
+from __future__ import print_function
 import Crypto.Cipher.AES
 import Crypto.Util.Counter
 from Crypto.Hash import SHA256
@@ -9,11 +10,48 @@ import os, random, struct
 import StringIO
 import json
 
-from pyfunctions import parse_args, psucceed, pfail, phelp
+# for error printing
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+        
+from pyfunctions import parse_args, psucceed, pfail, phelp, ensurelocaldir
+ensurelocaldir = ensurelocaldir.ensurelocaldir
 phelp = phelp.phelp
 parse_args = parse_args.parse_args
 psucceed = psucceed.psucceed
 pfail = pfail.pfail
+
+pykeys_file = "~/.pykeys/.keys"
+ksvtok      = None
+key_server  = None
+try:
+    config = json.load(open(os.path.expanduser("~/.pykeys/config.json")))
+    try:
+        pykey_file = config["pykeys_file"]
+        ksvtok = open(os.path.expanduser(config["token_file"])).read().strip()
+        if "key_server" not in config:
+            eprint("ERROR: Expected key_server in config, not using key_server")
+        key_server = config["key_server"]
+    except Exception as e:
+        eprint(e)
+        eprint("ERROR: Failed to find key token, should be token_file field in config which points to a file containing only the token, not using key server")
+except:
+    eprint("Configuration file not found, not using key server")
+pykeys_file = os.path.expanduser(pykeys_file)
+ensurelocaldir(pykeys_file[:pykeys_file.rfind('/')])
+
+session = None
+if ksvtok:
+    from requests import Session
+    session = Session()
+    try:
+        res = session.post(key_server + "/token", data=ksvtok)
+        if res.status_code >= 400:
+            raise Exception("Failed to post token to server. Server respond was {}".format(res.text))
+    except Exception as e:
+        eprint(e)
+        ksvtok = None
+        eprint("Failed to post token to key server {}".format(key_server))
 
 old = raw_input
 def raw_input(prompt=None):
@@ -90,6 +128,20 @@ def getCurrentDict():
     tries=0
     internal_dict = dict()
     hpass=None
+
+    if ksvtok:
+        res = session.get(key_server)
+        if res.status_code >= 400:
+            eprint("Failed to retrieve file from {}.\nResponse was {}".format(key_server,res.text))
+        else:
+            newfilecontents = res.content
+            newfile = open("/tmp/.pykeys", "wb")
+            newfile.write(newfilecontents)
+            newfile.close()
+            import filecmp
+            if not filecmp.cmp("/tmp/.pykeys",pykeys_file,False):
+                os.rename("/tmp/.pykeys", pykeys_file)
+                eprint("Updated Key File")
     
     while True:
         password=getpass.getpass()#raw_input("Please Enter Your Password: ")
@@ -134,7 +186,7 @@ def createPin():
     while len ( password ) < length:
         password += random.choice("0123456789")
     internal_dict[loc] = password
-    print password
+    print(password)
     
                      
 def createPass():
@@ -197,13 +249,15 @@ def createPass():
         nc = toadds.pop(n)
         password += random.choice(numCharMap[nc])
     internal_dict[loc] = password
-    print password
+    print(password)
         
-        
+
+did_change=False
+    
 description="pykeys is a utility for storing and accessing encrypted passwords"
 if ( len ( sys.argv ) <= 1 ):
-    phelp(description,[("<mode>","The mode to use, one of add|create|remove|lookup")])
-    exit(1)
+    phelp(description,[("<mode>","The mode to use, one of add|create|remove|lookup|dump|pin")])
+    exit(1) 
     
 mode = sys.argv[1].lower()
 
@@ -211,9 +265,7 @@ if mode not in ["add","remove","lookup","create","dump", "pin"]:
     phelp(description,[("<mode>","The mode to use, one of add|create|remove|lookup|dump|pin")])
     exit(1)
 
-    
-USER = os.environ['USER']
-FILE_NAME = "/home/{}/.keys".format(USER)
+FILE_NAME = pykeys_file
 hpass = None
 internal_dict = None
                 
@@ -226,6 +278,7 @@ if mode == "add":
     pas = res["pas"]
     if loc not in internal_dict:
         internal_dict[loc] = pas
+        did_change = True
     else:
         pfail("Error: Entry already exists")
 elif mode == "remove":
@@ -235,31 +288,51 @@ elif mode == "remove":
     loc = res["loc"]
     if loc in internal_dict:
         del internal_dict[loc]
+        did_change = True
         psucceed(loc)
     else:
         pfail("Error: No such entry")
+elif mode == "update":
+    pass
 elif mode == "create":
     createPass()
+    did_change = True
 elif mode== "pin":
     createPin()
+    did_change = True
 elif mode == "lookup":
     res = parse_args(description,[{'name': 'lookup', 'description': 'Specifies the lookup mode'},
-                                  {'name': 'loc', "description": "The element to lookup"}])
+                                  {'name': '<loc>', "description": "The element to lookup"},
+                                  {"name": "nnl", "flag": "-n", "optional": True, "description": "Don't include a new line in the printed result (i.e. for copying)"}])
     getCurrentDict()
-    loc = res["loc"]
+    loc = res["<loc>"]
+    string=""
+    endline = "" if "nnl" in res else "\n"
+    
     if loc in internal_dict:
-        print internal_dict[loc]
-        if loc + "/pin" in internal_dict:
-            print internal_dict[loc+"/pin"]
+        string += internal_dict[loc] + endline
+        if "nnl" not in res and loc + "/pin" in internal_dict:
+            string += internal_dict[loc+"/pin"] + endline
     elif loc + "/pin" in internal_dict:
-        print internal_dict[loc+"/pin"]
+        string += internal_dict[loc+"/pin"] + endline
     else:
         pfail("Error: No such entry")
+    sys.stdout.write(string)
+    sys.stdout.flush()
 elif mode == "dump":
     getCurrentDict()
     for loc in internal_dict:
-        print "{} {}".format(loc,internal_dict[loc])
+        print("{} {}".format(loc,internal_dict[loc]))
 
-encrypt_file(hpass,
+if did_change and ksvtok:
+    encrypt_file(hpass,
              json.dumps(internal_dict),
              FILE_NAME)
+    eprint("Updating remote file")
+    kfile = open ( pykeys_file, 'rb' )
+    data = kfile.read()
+    kfile.close()
+    res = session.put(key_server,data=data)
+    if res.status_code >= 400:
+        eprint("Failed to update remote file")
+    
